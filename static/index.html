@@ -27,13 +27,23 @@
 
   <!-- HOME / SEARCH -->
   <div v-if="page==='home' || page==='adult'" class="max-w-2xl mx-auto p-4">
-    <div class="flex gap-2 mb-4">
+    <!-- Search row -->
+    <div class="mb-2">
       <input v-model="searchQ" @input="debouncedSearch" placeholder="Название или автор..."
-        class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+        class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+    </div>
+    <!-- Genre pickers row -->
+    <div class="flex gap-2 mb-4">
+      <select v-model="searchGroup" @change="onGroupChange"
+        class="flex-1 border rounded-lg px-2 py-2 text-sm min-w-0">
+        <option value="">Все категории</option>
+        <option v-for="g in genreGroups" :key="g.genre" :value="g.genre">{{ g.genre }}</option>
+      </select>
       <select v-model="searchGenre" @change="doSearch(0)"
-        class="border rounded-lg px-2 py-2 text-sm max-w-[160px]">
-        <option value="">Все жанры</option>
-        <option v-for="g in genreGroups" :key="g.genre" :value="'group:' + g.genre">{{ g.genre }} ({{ g.count.toLocaleString() }})</option>
+        class="flex-1 border rounded-lg px-2 py-2 text-sm min-w-0"
+        :disabled="!searchGroup">
+        <option value="">Все поджанры</option>
+        <option v-for="s in activeSubgenres" :key="s.code" :value="s.code">{{ s.name }}</option>
       </select>
     </div>
 
@@ -189,6 +199,12 @@ createApp({
     // Search
     const searchQ = ref('')
     const searchGenre = ref('')
+    const searchGroup = ref('')
+    const activeSubgenres = computed(() => {
+      if (!searchGroup.value) return []
+      const grp = genreGroups.value.find(g => g.genre === searchGroup.value)
+      return grp ? grp.subgenres || [] : []
+    })
     const searchResults = ref([])
     const searchTotal = ref(0)
     const searchPage = ref(0)
@@ -221,9 +237,12 @@ createApp({
     async function doSearch(pg = 0) {
       loading.value = true
       searchPage.value = pg
+      const genreParam = searchGenre.value
+        ? searchGenre.value
+        : searchGroup.value ? 'group:' + searchGroup.value : ''
       const params = new URLSearchParams({
         q: searchQ.value,
-        genre: searchGenre.value,
+        genre: genreParam,
         adult: isAdult.value,
         page: pg,
         limit: searchLimit,
@@ -242,6 +261,11 @@ createApp({
     async function loadGenres() {
       const groups = await fetch('/api/genres?adult=' + isAdult.value + '&grouped=true').then(r => r.json())
       genreGroups.value = groups.filter(g => g.is_group)
+    }
+
+    function onGroupChange() {
+      searchGenre.value = ''
+      doSearch(0)
     }
 
 
@@ -418,9 +442,10 @@ createApp({
 
     return {
       page, prevPage, loading,
-      searchQ, searchGenre, searchResults, searchTotal, searchPage, searchLimit,
+      searchQ, searchGenre, searchGroup, activeSubgenres, searchResults, searchTotal, searchPage, searchLimit,
       genres, genreGroups, genreFlat, currentBook, myBooks, myFilter, statusMap, graphEmpty,
       debouncedSearch, doSearch, openBook, navigate, goBack, setStatus, loadMy,
+      onGroupChange,
       fmtGenre, statusLabel, statusBadgeClass, statusBtnActive, relTypeLabel,
       groupedRelated,
     }

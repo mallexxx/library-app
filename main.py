@@ -296,7 +296,7 @@ def search(
     if genre:
         if genre.startswith("group:"):
             group_name = genre[6:]
-            codes = GENRE_GROUPS.get(group_name, [])
+            codes = list(GENRE_GROUPS.get(group_name, {}).keys())
             if codes:
                 placeholders = ",".join("?" * len(codes))
                 # Match any genre code that starts with one of the group's codes
@@ -353,65 +353,262 @@ def search(
     }
 
 # ── Genre groups ─────────────────────────────────────────────────────────────
-GENRE_GROUPS = {
-    "Фантастика и фэнтези": ["sf", "sf_social", "sf_space", "sf_history", "sf_action",
-        "sf_fantasy", "sf_heroic", "sf_detective", "sf_horror", "sf_humor", "sf_epic",
-        "sf_cyberpunk", "sf_postapocalyptic", "sf_litrpg", "fantasy", "fantasy_alt_hist",
-        "sf_stimpank", "sf_mystic", "sf_technofantasy", "sf_irony", "sf_etc",
-        "sf_fantasy_city", "popadancy", "boyar_anime", "network_literature"],
-    "Детективы и триллеры": ["detective", "thriller", "detective_police", "detective_hard",
-        "detective_irony", "detective_maniac", "detective_classic", "detective_hist",
-        "detective_action", "detective_espionage", "det_espionage", "det_action",
-        "det_classic", "det_irony", "det_history", "det_hard", "det_police", "det_crime",
-        "det_mental", "det_political", "horror", "love_detective", "det_lady",
-        "det_artifact"],
-    "Проза": ["prose_contemporary", "prose_classic", "prose_rus_classic", "prose_counter",
-        "prose_history", "prose_military", "prose_su_classics", "prose_magic",
-        "prose_poem", "prose_abs", "antique_russian", "antique_east", "prose", "story",
-        "fanfiction", "literature_20"],
-    "Любовные романы": ["love_contemporary", "love_history", "love_short", "love_erotica",
-        "love_sf", "love_det", "love_hard", "love"],
-    "Приключения": ["adventure", "adventure_western", "adventure_history", "adventure_marine",
-        "adventure_geo", "adventure_animal", "adventure_modern",
-        "adv_history", "adv_animal", "adv_indian", "adv_maritime", "adv_geo",
-        "adv_western", "adv_modern", "adv_extreme"],
-    "Для детей": ["child_prose", "child_sf", "child_det", "child_tale", "child_education",
-        "child_adv", "child_humor", "child_classical", "children", "fairy_tales",
-        "child_tale_russian_writers", "child_tale_foreign_writers",
-        "child_det_children_detectives", "foreign_children", "child_verse",
-        "folk_tale", "child_adv_animal", "child_sf_horror", "child_prose_history"],
-    "Юмор": ["humor", "humor_prose", "humor_verse", "humor_satire", "humor_anecdote"],
-    "Биографии и публицистика": ["nonf_biography", "nonf_publicism", "nonf_criticism",
-        "biography", "nonfiction", "sci_culture"],
-    "Наука и образование": ["sci_popular", "sci_phys", "sci_math", "sci_chem", "sci_biology",
-        "sci_medicine", "sci_history", "sci_philosophy", "sci_psychology", "sci_social_studies",
-        "sci_linguistic", "sci_geo", "sci_tech", "sci_it", "sci_ecology", "sci_transport",
-        "sci_juris", "sci_economy", "sci_politics", "sci_religion",
-        "sci_cosmos", "sci_state", "sci_pedagogy", "sci_veterinary",
-        "science", "sci_philology", "sci_theories", "sci_medicine_alternative"],
-    "История": ["history_russia", "antique", "antique_myths",
-        "antique_antic", "antique_oriental", "antique_european", "antique_ant"],
-    "Психология и саморазвитие": ["self_help", "popular_business",
-        "org_behavior", "management", "marketing", "economics"],
-    "Техника и IT": ["comp_www", "comp_soft", "comp_hard", "comp_programming",
-        "comp_db", "comp_osnet", "comp_game", "computers"],
-    "Поэзия": ["poetry", "antique_poetry", "lyrics"],
-    "Драматургия": ["dramaturgy", "antique_plays"],
-    "Религия и эзотерика": ["religion", "religion_budda", "religion_christianity",
-        "religion_islam", "religion_judaism", "religion_paganism", "religion_self",
-        "religion_esoterics", "religion_hinduism"],
-    "Дом и быт": ["home_health", "home_cooking", "home_sport", "home_crafts",
-        "home_pets", "home_sex", "sport", "health", "home_garden", "home"],
-    "Справочники": ["ref_encyc", "ref_dict", "ref_guide", "ref_almanac", "ref_ref",
-        "economics_ref", "banking"],
+# Structure: { "Категория": { "subgenre_code": "Читаемое название", ... }, ... }
+# Codes match flibusta INPX genre field (may be compound: "sf:network_literature")
+GENRE_GROUPS: dict[str, dict[str, str]] = {
+    "Фантастика и фэнтези": {
+        "sf":                   "Научная фантастика",
+        "sf_space":             "Космическая фантастика",
+        "sf_social":            "Социальная фантастика",
+        "sf_history":           "Альтернативная история",
+        "sf_action":            "Боевая фантастика",
+        "sf_fantasy":           "Фэнтези",
+        "sf_heroic":            "Героическое фэнтези",
+        "sf_fantasy_city":      "Городское фэнтези",
+        "sf_epic":              "Эпическое фэнтези",
+        "sf_horror":            "Ужасы",
+        "sf_humor":             "Юмористическая фантастика",
+        "sf_cyberpunk":         "Киберпанк",
+        "sf_postapocalyptic":   "Постапокалипсис",
+        "sf_litrpg":            "ЛитРПГ",
+        "sf_stimpank":          "Стимпанк",
+        "sf_mystic":            "Мистика",
+        "sf_technofantasy":     "Технофэнтези",
+        "sf_detective":         "Фантастический детектив",
+        "sf_irony":             "Иронческая фантастика",
+        "sf_etc":               "Фантастика: прочее",
+        "fantasy":              "Фэнтези",
+        "fantasy_alt_hist":     "Альтернативная история",
+        "popadancy":            "Попаданцы",
+        "boyar_anime":          "Боярь-аниме",
+        "network_literature":   "Самиздат / сетевая литература",
+    },
+    "Детективы и триллеры": {
+        "detective":            "Детективы",
+        "det_classic":          "Классический детектив",
+        "det_police":           "Полицейский детектив",
+        "det_crime":            "Криминальный детектив",
+        "det_history":          "Исторический детектив",
+        "det_hard":             "Крутой детектив",
+        "det_lady":             "Дамский детектив",
+        "det_irony":            "Иронический детектив",
+        "det_espionage":        "Шпионский детектив",
+        "det_political":        "Политический детектив",
+        "det_su":               "Советский детектив",
+        "det_artifact":         "Артефакт-детектив",
+        "det_mental":           "Психологический детектив",
+        "det_action":           "Боевик",
+        "love_detective":       "Любовный детектив",
+        "thriller":             "Триллер",
+        "horror":               "Ужасы",
+        "det_maniac":           "Про маньяков",
+    },
+    "Проза": {
+        "prose_contemporary":   "Современная проза",
+        "prose_classic":        "Классическая проза",
+        "prose_rus_classic":    "Русская классика",
+        "prose_su_classics":    "Советская классика",
+        "prose_history":        "Историческая проза",
+        "prose_military":       "Проза о войне",
+        "prose_counter":        "Контркультура",
+        "prose_magic":          "Магический реализм",
+        "prose_poem":           "Поэма в прозе",
+        "prose_abs":            "Абсурдистская проза",
+        "antique_russian":      "Древнерусская литература",
+        "antique_east":         "Восточная классика",
+        "prose":                "Проза",
+        "story":                "Рассказы и новеллы",
+        "literature_20":        "Проза XX века",
+        "fanfiction":           "Фанфикшн",
+        "foreign_prose":        "Зарубежная проза",
+    },
+    "Любовные романы": {
+        "love_sf":              "Любовное фэнтези",
+        "love_contemporary":    "Современные любовные романы",
+        "love_short":           "Короткие любовные романы",
+        "love_history":         "Исторические любовные романы",
+        "love_hard":            "Остросюжетные любовные романы",
+        "love_det":             "Любовный детектив",
+        "love_erotica":         "Эротическая литература",
+        "love":                 "Любовные романы",
+    },
+    "Приключения": {
+        "adv_history":          "Исторические приключения",
+        "adv_geo":              "Путешествия и география",
+        "adv_animal":           "Природа и животные",
+        "adv_maritime":         "Морские приключения",
+        "adv_indian":           "Вестерн, про индейцев",
+        "adv_western":          "Вестерн",
+        "adv_modern":           "Современные приключения",
+        "adv_extreme":          "Экстремальные приключения",
+        "adventure":            "Приключения",
+        "adventure_history":    "Исторические приключения",
+        "adventure_marine":     "Морские приключения",
+        "adventure_geo":        "Путешествия",
+        "adventure_animal":     "Животные",
+        "adventure_western":    "Вестерн",
+        "adventure_modern":     "Современные приключения",
+    },
+    "Для детей": {
+        "child_prose":                  "Детская проза",
+        "child_adv":                    "Детские приключения",
+        "child_adv_animal":             "Детские книги о животных",
+        "child_prose_history":          "Историческая детская проза",
+        "child_prose_humor":            "Юмористическая детская проза",
+        "child_prose_romantic":         "Детская проза о любви",
+        "child_sf":                     "Детская фантастика",
+        "child_sf_fantasy":             "Детское фэнтези",
+        "child_sf_horror":              "Детские ужасы и мистика",
+        "child_det":                    "Детские детективы",
+        "child_det_children_detectives":"Дети-сыщики",
+        "child_tale":                   "Сказки",
+        "child_tale_russian_writers":   "Сказки отечественных писателей",
+        "child_tale_foreign_writers":   "Сказки зарубежных писателей",
+        "folk_tale":                    "Народные сказки",
+        "child_verse":                  "Стихи для детей",
+        "child_education":              "Детская образовательная литература",
+        "child_classical":              "Классическая детская литература",
+        "child_humor":                  "Детский юмор",
+        "foreign_children":             "Зарубежная детская литература",
+        "children":                     "Детская литература",
+        "fairy_tales":                  "Сказки",
+    },
+    "Юмор": {
+        "humor":                "Юмор",
+        "humor_prose":          "Юмористическая проза",
+        "humor_verse":          "Юмористические стихи и басни",
+        "humor_satire":         "Сатира",
+        "humor_anecdote":       "Анекдоты",
+    },
+    "Документальная": {
+        "nonf_biography":       "Биографии и мемуары",
+        "nonf_publicism":       "Публицистика",
+        "nonf_criticism":       "Критика",
+        "biography":            "Биографии",
+        "nonfiction":           "Документальная литература",
+        "sci_culture":          "Культурология",
+        "nonf_biography_writers": "Биографии писателей и поэтов",
+        "military_history":     "Военная документалистика",
+    },
+    "Наука и образование": {
+        "sci_history":          "История",
+        "sci_psychology":       "Психология",
+        "sci_philosophy":       "Философия",
+        "sci_politics":         "Политика",
+        "sci_popular":          "Научно-популярная литература",
+        "sci_linguistic":       "Языкознание",
+        "sci_philology":        "Литературоведение",
+        "sci_medicine":         "Медицина",
+        "sci_math":             "Математика",
+        "sci_phys":             "Физика",
+        "sci_juris":            "Юриспруденция",
+        "sci_biology":          "Биология",
+        "sci_social_studies":   "Обществознание",
+        "sci_economy":          "Экономика",
+        "sci_chem":             "Химия",
+        "sci_geo":              "География",
+        "sci_tech":             "Техника",
+        "sci_it":               "Информатика",
+        "sci_ecology":          "Экология",
+        "sci_cosmos":           "Астрономия",
+        "sci_pedagogy":         "Педагогика",
+        "sci_state":            "Государство и право",
+        "sci_veterinary":       "Ветеринария",
+        "sci_transport":        "Транспорт",
+        "sci_religion":         "Религиоведение",
+        "sci_theories":         "Научные теории",
+        "sci_medicine_alternative": "Нетрадиционная медицина",
+        "sci_psychology_popular": "Популярная психология",
+        "science":              "Наука",
+    },
+    "Деловая литература": {
+        "popular_business":     "Деловая литература",
+        "management":           "Менеджмент",
+        "marketing":            "Маркетинг и PR",
+        "economics":            "Экономика",
+        "org_behavior":         "Кадры и карьера",
+        "banking":              "Финансы",
+        "self_help":            "Саморазвитие",
+        "economics_ref":        "Экономические справочники",
+    },
+    "Компьютеры и IT": {
+        "comp_programming":     "Программирование",
+        "comp_www":             "Интернет",
+        "comp_soft":            "Программы и ОС",
+        "comp_hard":            "Компьютерное железо",
+        "comp_db":              "Базы данных",
+        "comp_osnet":           "Сети и ОС",
+        "comp_game":            "Игры",
+        "computers":            "Компьютеры",
+    },
+    "Поэзия": {
+        "poetry":               "Поэзия",
+        "antique_poetry":       "Античная поэзия",
+        "lyrics":               "Лирика",
+        "humor_verse":          "Юмористические стихи",
+    },
+    "Драматургия": {
+        "dramaturgy":           "Драматургия",
+        "antique_plays":        "Античная драма",
+        "drama":                "Драма",
+        "comedy":               "Комедия",
+        "screenplays":          "Сценарии",
+    },
+    "Религия и эзотерика": {
+        "religion":             "Религия",
+        "religion_christianity":"Христианство",
+        "religion_islam":       "Ислам",
+        "religion_budda":       "Буддизм",
+        "religion_judaism":     "Иудаизм",
+        "religion_paganism":    "Язычество",
+        "religion_hinduism":    "Индуизм",
+        "religion_esoterics":   "Эзотерика",
+        "religion_self":        "Самосовершенствование",
+        "religion_orthodoxy":   "Православие",
+    },
+    "Дом и семья": {
+        "home_health":          "Здоровье",
+        "home_cooking":         "Кулинария",
+        "home_crafts":          "Хобби и ремесла",
+        "home_sport":           "Спорт и боевые искусства",
+        "home_pets":            "Домашние животные",
+        "home_sex":             "Семья и секс",
+        "home_garden":          "Сад и огород",
+        "home_entertain":       "Развлечения",
+        "home_diy":             "Сделай сам",
+        "home":                 "Домоводство",
+        "sport":                "Спорт",
+        "health":               "Здоровье",
+    },
+    "Искусство и культура": {
+        "sci_culture":          "Культурология",
+        "design":               "Искусство и дизайн",
+        "aphorisms":            "Афоризмы",
+    },
+    "Справочники": {
+        "ref_encyc":            "Энциклопедии",
+        "ref_dict":             "Словари",
+        "ref_guide":            "Путеводители",
+        "ref_almanac":          "Альманахи",
+        "ref_ref":              "Справочники",
+        "geo_guides":           "Географические справочники",
+        "tbg_school":           "Учебники",
+    },
 }
 
 # invert: genre_code → group_name
-GENRE_TO_GROUP = {}
-for grp, codes in GENRE_GROUPS.items():
-    for code in codes:
+GENRE_TO_GROUP: dict[str, str] = {}
+for grp, subgenres in GENRE_GROUPS.items():
+    for code in subgenres:
         if code not in GENRE_TO_GROUP:
             GENRE_TO_GROUP[code] = grp
+
+# flat: genre_code → readable name
+GENRE_NAMES: dict[str, str] = {}
+for grp, subgenres in GENRE_GROUPS.items():
+    for code, name in subgenres.items():
+        if code not in GENRE_NAMES:
+            GENRE_NAMES[code] = name
 
 def genre_to_group(genre_code: str) -> str | None:
     """Handle compound genre codes like 'love_sf:network_literature:popadancy'.
@@ -422,6 +619,14 @@ def genre_to_group(genre_code: str) -> str | None:
             return grp
     return None
 
+def genre_display_name(genre_code: str) -> str:
+    """Return human-readable name for a genre code (first part of compound code)."""
+    for part in genre_code.split(":"):
+        name = GENRE_NAMES.get(part)
+        if name:
+            return name
+    return genre_code
+
 # ── Genres ───────────────────────────────────────────────────────────────────
 @app.get("/api/genres")
 def genres(adult: bool = False, grouped: bool = False):
@@ -430,28 +635,48 @@ def genres(adult: bool = False, grouped: bool = False):
             "SELECT genre, COUNT(*) as n FROM books GROUP BY genre ORDER BY n DESC"
         ).fetchall()
 
+    # Build per-group counts from DB (actual book counts)
+    group_counts: dict[str, int] = {}
+    subgenre_counts: dict[str, int] = {}  # raw_code → count
+    for r in rows:
+        is_adult = r["genre"] in ADULT_GENRES
+        if not adult and is_adult:
+            continue
+        if adult and not is_adult:
+            continue
+        grp = genre_to_group(r["genre"])
+        if grp:
+            group_counts[grp] = group_counts.get(grp, 0) + r["n"]
+        # accumulate counts for canonical codes (first part of compound)
+        first_code = r["genre"].split(":")[0]
+        subgenre_counts[first_code] = subgenre_counts.get(first_code, 0) + r["n"]
+
     if grouped:
-        # Return groups with total counts
-        group_counts: dict[str, int] = {}
-        ungrouped = []
-        for r in rows:
-            is_adult = r["genre"] in ADULT_GENRES
-            if not adult and is_adult:
+        # Return: list of { genre, count, is_group, subgenres?: [{code, name, count}] }
+        result = []
+        for grp_name, subgenres in GENRE_GROUPS.items():
+            grp_count = group_counts.get(grp_name, 0)
+            if grp_count == 0:
                 continue
-            if adult and not is_adult:
-                continue
-            grp = genre_to_group(r["genre"])
-            if grp:
-                group_counts[grp] = group_counts.get(grp, 0) + r["n"]
-            else:
-                ungrouped.append({"genre": r["genre"], "count": r["n"]})
-        result = [{"genre": k, "count": v, "is_group": True}
-                  for k, v in sorted(group_counts.items(), key=lambda x: -x[1])]
-        # Append ungrouped genres that have significant count
-        result += [g for g in ungrouped if g["count"] > 100]
+            subs = []
+            seen_names: set[str] = set()
+            for code, name in subgenres.items():
+                cnt = subgenre_counts.get(code, 0)
+                if cnt == 0 or name in seen_names:
+                    continue
+                seen_names.add(name)
+                subs.append({"code": code, "name": name, "count": cnt})
+            subs.sort(key=lambda x: -x["count"])
+            result.append({
+                "genre": grp_name,
+                "count": grp_count,
+                "is_group": True,
+                "subgenres": subs,
+            })
+        result.sort(key=lambda x: -x["count"])
         return result
 
-    # Flat list (includes group field for frontend optgroup building)
+    # Flat list (for backwards compat)
     result = []
     for r in rows:
         is_adult = r["genre"] in ADULT_GENRES
