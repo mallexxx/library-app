@@ -18,11 +18,11 @@
 
   <!-- Nav -->
   <nav class="bg-white border-b sticky top-0 z-10 px-4 py-3 flex items-center gap-3">
-    <button @click="page='home'" class="font-bold text-lg">📚</button>
-    <button @click="page='home'" :class="page==='home'?'text-blue-600 font-medium':'text-gray-500'" class="text-sm">Поиск</button>
-    <button @click="page='my'" :class="page==='my'?'text-blue-600 font-medium':'text-gray-500'" class="text-sm">Мои книги</button>
-    <button @click="page='graph'" :class="page==='graph'?'text-blue-600 font-medium':'text-gray-500'" class="text-sm">Граф</button>
-    <button @click="page='adult'" :class="page==='adult'?'text-red-500 font-medium':'text-gray-400'" class="text-sm ml-auto">18+</button>
+    <button @click="navigate('home')" class="font-bold text-lg">📚</button>
+    <button @click="navigate('home')" :class="page==='home'?'text-blue-600 font-medium':'text-gray-500'" class="text-sm">Поиск</button>
+    <button @click="navigate('my')" :class="page==='my'?'text-blue-600 font-medium':'text-gray-500'" class="text-sm">Мои книги</button>
+    <button @click="navigate('graph')" :class="page==='graph'?'text-blue-600 font-medium':'text-gray-500'" class="text-sm">Граф</button>
+    <button @click="navigate('adult')" :class="page==='adult'?'text-red-500 font-medium':'text-gray-400'" class="text-sm ml-auto">18+</button>
   </nav>
 
   <!-- HOME / SEARCH -->
@@ -344,27 +344,51 @@ createApp({
       return order.filter(t => groups[t]).map(t => ({ type: t, books: groups[t] }))
     })
 
-    watch(page, (newPage) => {
-      if (newPage === 'graph') loadGraph()
-      if (newPage === 'my') loadMy()
-      if (newPage === 'adult') { loadGenres(); doSearch(0) }
-      if (newPage === 'home') { loadGenres(); doSearch(0) }
-      // Push nav tabs to history (but not 'book' — openBook does that)
-      if (newPage !== 'book') history.pushState({ page: newPage }, '')
-    })
+    // ── Navigation ──────────────────────────────────────────────────────────
+    // Single source of truth: navigate(page, bookId?) handles history + data loading
+    async function navigate(toPage, bookId = null, pushHistory = true) {
+      if (pushHistory) {
+        history.pushState({ page: toPage, bookId }, '')
+      }
+
+      if (toPage === 'book' && bookId) {
+        page.value = 'book'
+        currentBook.value = null
+        const r = await fetch('/api/book/' + bookId)
+        currentBook.value = await r.json()
+        if (currentBook.value.status?.status) {
+          statusMap.value[bookId] = currentBook.value.status.status
+        }
+        if (currentBook.value.status) {
+          statusMap.value[bookId] = currentBook.value.status.status || currentBook.value.status
+        }
+        currentBook.value.related?.forEach(b => {
+          if (statusMap.value[b.id]) b._status = statusMap.value[b.id]
+        })
+      } else {
+        page.value = toPage
+        currentBook.value = null
+        if (toPage === 'graph') loadGraph()
+        if (toPage === 'my') loadMy()
+        if (toPage === 'adult' || toPage === 'home') { loadGenres(); doSearch(0) }
+      }
+    }
+
+    function openBook(id) {
+      return navigate('book', id)
+    }
+
+    watch(page, () => {}) // keep reactivity, navigation handled by navigate()
 
     onMounted(() => {
+      // Stamp initial history entry so back works from first page
+      history.replaceState({ page: 'home', bookId: null }, '')
       loadGenres()
       doSearch(0)
 
-      // Handle browser back/forward
       window.addEventListener('popstate', (e) => {
-        if (e.state?.page === 'book') {
-          openBook(e.state.bookId)
-        } else {
-          page.value = e.state?.page || 'home'
-          currentBook.value = null
-        }
+        const state = e.state || { page: 'home', bookId: null }
+        navigate(state.page, state.bookId, false) // false = don't push again
       })
     })
 
@@ -372,7 +396,7 @@ createApp({
       page, prevPage, loading,
       searchQ, searchGenre, searchResults, searchTotal, searchPage, searchLimit,
       genres, currentBook, myBooks, myFilter, statusMap, graphEmpty,
-      debouncedSearch, doSearch, openBook, setStatus, loadMy,
+      debouncedSearch, doSearch, openBook, navigate, setStatus, loadMy,
       fmtGenre, statusLabel, statusBadgeClass, statusBtnActive, relTypeLabel,
       groupedRelated,
     }
