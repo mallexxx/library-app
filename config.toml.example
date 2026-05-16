@@ -1,0 +1,28 @@
+[library]
+inpx_file = "/library/flibusta_fb2_local.inpx"
+local_books_path = "/books"
+books_db = "/data/books.db"
+library_db = "/data/library.db"
+
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[relations]
+cache_days = 30
+genre_limit = 20
+
+[download]
+inpxer_base = "https://your-inpxer-domain/download"
+filebrowser_base = "https://your-filebrowser-domain/books"
+
+[adult]
+genres = [
+  "love_erotica",
+  "erotik",
+  "sex_sf",
+  "adv_sex",
+  "prose_sex",
+  "love_erotica_fantasy",
+  "on_sex",
+]

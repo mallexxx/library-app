@@ -1,0 +1,6 @@
+data/books.db
+data/library.db
+data/config.toml
+__pycache__/
+*.pyc
+.DS_Store
