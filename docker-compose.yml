@@ -11,6 +11,8 @@ services:
       - /mnt/RED_2TB/storage/books:/books:ro
       - /mnt/RED_2TB/docker/library/data:/data:rw
       - /mnt/RED_2TB/docker/library/static:/app/static:ro
+      - /mnt/RED_2TB/docker/library/main.py:/app/main.py:ro
+      - /mnt/RED_2TB/docker/library/init_db.py:/app/init_db.py:ro
     networks:
       - caddy_default
 
