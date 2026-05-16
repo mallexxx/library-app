@@ -33,10 +33,7 @@
       <select v-model="searchGenre" @change="doSearch(0)"
         class="border rounded-lg px-2 py-2 text-sm max-w-[160px]">
         <option value="">Все жанры</option>
-        <optgroup v-for="g in genreGroups" :key="g.genre" :label="g.genre + ' (' + g.count + ')'">
-          <option v-for="sub in g.children || []" :key="sub.genre" :value="sub.genre">{{ fmtGenre(sub.genre) }} ({{ sub.count }})</option>
-        </optgroup>
-        <option v-for="g in genreFlat" :key="g.genre" :value="g.genre">{{ fmtGenre(g.genre) }} ({{ g.count }})</option>
+        <option v-for="g in genreGroups" :key="g.genre" :value="'group:' + g.genre">{{ g.genre }} ({{ g.count.toLocaleString() }})</option>
       </select>
     </div>
 
@@ -122,7 +119,7 @@
       <div class="space-y-2">
         <div v-for="rel in groupedRelated" :key="rel.type" class="mb-3">
           <div class="text-xs text-gray-400 uppercase tracking-wide mb-1">{{ relTypeLabel(rel.type) }}</div>
-          <div v-for="b in rel.books.slice(0,10)" :key="b.id"
+          <div v-for="b in (rel.type==='google_books' ? rel.books : rel.books.slice(0,10))" :key="b.id"
             @click="openBook(b.id)"
             class="bg-white border rounded p-2.5 cursor-pointer hover:border-blue-400 mb-1.5 flex justify-between items-center">
             <div class="min-w-0">
@@ -243,22 +240,8 @@ createApp({
     }
 
     async function loadGenres() {
-      const flat = await fetch('/api/genres?adult=' + isAdult.value).then(r => r.json())
-      genres.value = flat
-      // Build optgroup map: groupName → [genres]
-      const map = {}
-      const ungrouped = []
-      flat.forEach(g => {
-        if (g.group) {
-          if (!map[g.group]) map[g.group] = { genre: g.group, count: 0, children: [] }
-          map[g.group].children.push(g)
-          map[g.group].count += g.count
-        } else {
-          ungrouped.push(g)
-        }
-      })
-      genreGroups.value = Object.values(map).sort((a,b) => b.count - a.count)
-      genreFlat.value = ungrouped
+      const groups = await fetch('/api/genres?adult=' + isAdult.value + '&grouped=true').then(r => r.json())
+      genreGroups.value = groups.filter(g => g.is_group)
     }
 
 

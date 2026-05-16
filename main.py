@@ -294,8 +294,24 @@ def search(
         params += [f"%{q}%", f"%{q}%"]
 
     if genre:
-        conditions.append("genre = ?")
-        params.append(genre)
+        if genre.startswith("group:"):
+            group_name = genre[6:]
+            codes = GENRE_GROUPS.get(group_name, [])
+            if codes:
+                placeholders = ",".join("?" * len(codes))
+                # Match any genre code that starts with one of the group's codes
+                # since INPX uses compound codes like "sf:network_literature"
+                group_conditions = []
+                for code in codes:
+                    group_conditions.append("genre = ? OR genre LIKE ?")
+                    params += [code, f"{code}:%"]
+                conditions.append("(" + " OR ".join(group_conditions) + ")")
+            else:
+                conditions.append("genre = ?")
+                params.append(genre)
+        else:
+            conditions.append("genre = ?")
+            params.append(genre)
 
     if lang:
         conditions.append("lang = ?")
