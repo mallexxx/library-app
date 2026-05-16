@@ -155,13 +155,18 @@ async def _enrich_google_books(book_id: str, title: str, author: str):
                 return
             rows = []
             with bconn() as bc:
-                for genre in mapped[:3]:
+                for genre in mapped:
                     peers = bc.execute(
-                        "SELECT id FROM books WHERE genre=? AND id!=? ORDER BY RANDOM() LIMIT 10",
+                        "SELECT id FROM books WHERE genre=? AND id!=? ORDER BY RANDOM() LIMIT 50",
                         (genre, book_id)
                     ).fetchall()
                     for p in peers:
                         rows.append((book_id, p["id"], "google_books", 1.2, now))
+            # Sanity cap: 50 unique relations
+            seen = set(); deduped = []
+            for r in rows:
+                if r[1] not in seen: seen.add(r[1]); deduped.append(r)
+            rows = deduped[:50]
             if rows:
                 with lconn() as lc:
                     lc.executemany(
@@ -197,14 +202,22 @@ async def build_relations(book_id: str):
                 for p in peers:
                     rows_to_insert.append((book_id, p["id"], "same_author", 1.0, now))
 
-            # same_series
+            # same_series — only author's own cycle (same author in series)
+            # Skip publisher series (multiple different authors in same series)
             if book["series"] and book["series"].strip():
-                peers = bc.execute(
-                    "SELECT id FROM books WHERE series=? AND id!=? LIMIT 30",
-                    (book["series"], book_id)
-                ).fetchall()
-                for p in peers:
-                    rows_to_insert.append((book_id, p["id"], "same_series", 2.0, now))
+                # Count distinct authors in this series
+                series_authors = bc.execute(
+                    "SELECT COUNT(DISTINCT author) as n FROM books WHERE series=?",
+                    (book["series"],)
+                ).fetchone()["n"]
+                # Only treat as a real cycle if ≤3 distinct authors (likely same author multi-vol)
+                if series_authors <= 3:
+                    peers = bc.execute(
+                        "SELECT id FROM books WHERE series=? AND id!=? LIMIT 30",
+                        (book["series"], book_id)
+                    ).fetchall()
+                    for p in peers:
+                        rows_to_insert.append((book_id, p["id"], "same_series", 2.0, now))
 
             # same_genre — use RANDOM() sample to avoid slow full-genre scans
             if book["genre"]:
@@ -440,7 +453,7 @@ async def book_detail(book_id: str):
 
         # Get relations (show only books that exist in books.db)
         rel_rows = lc.execute(
-            "SELECT related_id, type, weight FROM relations WHERE book_id=? ORDER BY weight DESC LIMIT 60",
+            "SELECT related_id, type, weight FROM relations WHERE book_id=? ORDER BY weight DESC LIMIT 150",
             (book_id,)
         ).fetchall()
 
