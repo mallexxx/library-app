@@ -14,6 +14,7 @@ with open(CFG_PATH, "rb") as f:
 
 BOOKS_DB   = CFG["library"]["books_db"]
 LIBRARY_DB = CFG["library"]["library_db"]
+LOCAL_BOOKS_DIR = CFG["library"].get("local_books_dir", "")
 INPXER_BASE     = CFG["download"]["inpxer_base"]
 FILEBROWSER_BASE = CFG["download"]["filebrowser_base"]
 ADULT_GENRES     = set(CFG["adult"]["genres"])
@@ -263,9 +264,134 @@ def needs_google_enrichment(book_id: str) -> bool:
         ).fetchone()
         return row["n"] == 0
 
+# ── Local books (non-INPX files) ─────────────────────────────────────────────
+def init_db():
+    """Ensure library.db has all needed tables."""
+    with lconn() as lc:
+        lc.execute("""
+            CREATE TABLE IF NOT EXISTS read_log (
+                book_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL CHECK(status IN ('read','reading','want','starred')),
+                date_updated TEXT,
+                rating INTEGER,
+                notes TEXT,
+                created_at TEXT
+            )
+        """)
+        lc.execute("""
+            CREATE TABLE IF NOT EXISTS local_books (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                author TEXT,
+                file_path TEXT,
+                format TEXT,
+                inpx_id TEXT
+            )
+        """)
+        lc.commit()
+
+def _inpx_id_from_filename(filename: str) -> str | None:
+    """Extract INPX book id from fb2 filenames like 'Author_Title.XXXXXX.591341.fb2'"""
+    m = re.search(r'\.(\d{5,7})\.(fb2|epub)$', filename, re.IGNORECASE)
+    return m.group(1) if m else None
+
+def _title_from_filename(filename: str) -> str:
+    """Best-effort title from filename, strip known patterns."""
+    name = Path(filename).stem
+    # Remove trailing INPX id pattern like .591341
+    name = re.sub(r'\.\d{5,7}$', '', name)
+    # Remove random suffix like .EVEVZg
+    name = re.sub(r'\.[A-Za-z0-9]{6}$', '', name)
+    # Replace underscores/dashes
+    name = name.replace('_', ' ').replace('-', ' ')
+    return name.strip()
+
+def sync_local_books():
+    """Scan LOCAL_BOOKS_DIR, register new files in local_books + read_log."""
+    if not LOCAL_BOOKS_DIR or not Path(LOCAL_BOOKS_DIR).exists():
+        print(f"[local_books] dir not found: {LOCAL_BOOKS_DIR}")
+        return
+
+    SUPPORTED = {'.fb2', '.epub', '.pdf', '.djvu', '.mobi', '.azw3'}
+    files = [p for p in Path(LOCAL_BOOKS_DIR).rglob('*')
+             if p.is_file() and p.suffix.lower() in SUPPORTED]
+
+    print(f"[local_books] scanning {len(files)} files in {LOCAL_BOOKS_DIR}")
+
+    import hashlib
+    conn = sqlite3.connect(LIBRARY_DB, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    existing = {r[0] for r in conn.execute("SELECT file_path FROM local_books").fetchall()}
+
+    for fpath in files:
+        str_path = str(fpath)
+        inpx_id = _inpx_id_from_filename(fpath.name)
+        fmt = fpath.suffix.lstrip('.').lower()
+
+        if inpx_id:
+            with bconn() as bc:
+                exists_in_inpx = bc.execute("SELECT id FROM books WHERE id=?", (inpx_id,)).fetchone()
+            if exists_in_inpx:
+                conn.execute(
+                    "INSERT OR IGNORE INTO local_books(id, title, author, file_path, format, inpx_id)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (f"local:{inpx_id}", '', '', str_path, fmt, inpx_id)
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO read_log(book_id, status, date_updated, created_at)"
+                    " VALUES (?, 'starred', datetime('now'), datetime('now'))",
+                    (inpx_id,)
+                )
+                conn.commit()
+                if str_path not in existing:
+                    print(f"[local_books] matched INPX {inpx_id}: {fpath.name}")
+                continue
+
+        if str_path in existing:
+            continue
+
+        # No INPX match — create local-only record
+        fhash = hashlib.md5(str_path.encode()).hexdigest()[:8]
+        book_id = f"local:{fhash}"
+        title = _title_from_filename(fpath.name)
+        conn.execute(
+            "INSERT OR IGNORE INTO local_books(id, title, author, file_path, format, inpx_id)"
+            " VALUES (?,?,?,?,?,?)",
+            (book_id, title, '', str_path, fmt, None)
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO read_log(book_id, status, date_updated, created_at)"
+            " VALUES (?, 'starred', datetime('now'), datetime('now'))",
+            (book_id,)
+        )
+        print(f"[local_books] local-only: {book_id} → {fpath.name}")
+
+    conn.commit()
+    conn.close()
+    print("[local_books] sync done")
+
+def local_book_to_dict(row) -> dict:
+    """Convert a local_books row to the same shape as book_to_dict."""
+    d = dict(row)
+    d["author_display"] = d.get("author") or "Неизвестен"
+    d["title"] = d.get("title") or Path(d.get("file_path", "")).stem
+    d["genre"] = ""
+    d["series"] = ""
+    d["lang"] = ""
+    d["date"] = ""
+    d["size"] = 0
+    # Download via filebrowser — relative path under local_books dir
+    rel = str(Path(d["file_path"]).relative_to(LOCAL_BOOKS_DIR)) if LOCAL_BOOKS_DIR else d["file_path"]
+    d["download_url"] = f"{FILEBROWSER_BASE}/{rel}"
+    d["is_local"] = True
+    return d
+
 # ── App ──────────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_db()
+    if LOCAL_BOOKS_DIR:
+        sync_local_books()
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -687,8 +813,23 @@ def genres(adult: bool = False, grouped: bool = False):
     return result
 
 # ── Book detail ──────────────────────────────────────────────────────────────
-@app.get("/api/book/{book_id}")
+@app.get("/api/book/{book_id:path}")
 async def book_detail(book_id: str):
+    # Local-only book (not in INPX)
+    if book_id.startswith("local:"):
+        with lconn() as lc:
+            lb = lc.execute("SELECT * FROM local_books WHERE id=?", (book_id,)).fetchone()
+            if not lb:
+                raise HTTPException(404, "Local book not found")
+            status_row = lc.execute(
+                "SELECT status, rating, notes, date_updated FROM read_log WHERE book_id=?",
+                (book_id,)
+            ).fetchone()
+        d = local_book_to_dict(lb)
+        d["status"] = dict(status_row) if status_row else None
+        d["related"] = []
+        return d
+
     with bconn() as bc:
         book = bc.execute("SELECT * FROM books WHERE id=?", (book_id,)).fetchone()
     if not book:
@@ -759,7 +900,7 @@ async def set_status(body: dict):
         if status is None:
             lc.execute("DELETE FROM read_log WHERE book_id=?", (book_id,))
         else:
-            if status not in ("read", "reading", "want"):
+            if status not in ("read", "reading", "want", "starred"):
                 raise HTTPException(400, "Invalid status")
             lc.execute("""
                 INSERT INTO read_log(book_id, status, rating, notes, date_updated)
@@ -795,22 +936,40 @@ def my_books(status: Optional[str] = None):
     if not rows:
         return []
 
-    ids = [r["book_id"] for r in rows]
+    all_ids = [r["book_id"] for r in rows]
     status_map = {r["book_id"]: dict(r) for r in rows}
-    placeholders = ",".join("?" * len(ids))
 
-    with bconn() as bc:
-        books = bc.execute(
-            f"SELECT * FROM books WHERE id IN ({placeholders})", ids
-        ).fetchall()
+    # Split: INPX ids vs local-only ids
+    local_ids = [i for i in all_ids if i.startswith("local:")]
+    inpx_ids  = [i for i in all_ids if not i.startswith("local:")]
 
     result = []
-    for b in books:
-        d = book_to_dict(b)
-        d["status_info"] = status_map.get(b["id"])
-        result.append(d)
 
-    result.sort(key=lambda x: x["status_info"]["date_updated"] or "", reverse=True)
+    # INPX books
+    if inpx_ids:
+        placeholders = ",".join("?" * len(inpx_ids))
+        with bconn() as bc:
+            books = bc.execute(
+                f"SELECT * FROM books WHERE id IN ({placeholders})", inpx_ids
+            ).fetchall()
+        for b in books:
+            d = book_to_dict(b)
+            d["status_info"] = status_map.get(b["id"])
+            result.append(d)
+
+    # Local-only books
+    if local_ids:
+        with lconn() as lc2:
+            placeholders = ",".join("?" * len(local_ids))
+            local_rows = lc2.execute(
+                f"SELECT * FROM local_books WHERE id IN ({placeholders})", local_ids
+            ).fetchall()
+        for b in local_rows:
+            d = local_book_to_dict(b)
+            d["status_info"] = status_map.get(b["id"])
+            result.append(d)
+
+    result.sort(key=lambda x: (x.get("status_info") or {}).get("date_updated") or "", reverse=True)
     return result
 
 # ── Graph ────────────────────────────────────────────────────────────────────
