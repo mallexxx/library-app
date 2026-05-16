@@ -25,6 +25,14 @@ def init(db_path: str):
 
         CREATE INDEX IF NOT EXISTS idx_rel_book ON relations(book_id);
         CREATE INDEX IF NOT EXISTS idx_rel_type ON relations(book_id, type);
+
+        CREATE TABLE IF NOT EXISTS google_meta (
+            book_id      TEXT PRIMARY KEY,
+            cover_url    TEXT,
+            description  TEXT,
+            categories   TEXT,
+            fetched_at   TEXT DEFAULT (datetime('now'))
+        );
     """)
     conn.commit()
     conn.close()

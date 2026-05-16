@@ -19,6 +19,7 @@ FILEBROWSER_BASE = CFG["download"]["filebrowser_base"]
 ADULT_GENRES     = set(CFG["adult"]["genres"])
 GENRE_LIMIT      = CFG["relations"]["genre_limit"]
 CACHE_DAYS       = CFG["relations"]["cache_days"]
+GOOGLE_BOOKS_KEY = CFG.get("google_books", {}).get("api_key", "")
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
 def bconn():
@@ -48,24 +49,131 @@ def book_to_dict(row) -> dict:
     d["download_url"] = f"{INPXER_BASE}/{d['id']}"
     return d
 
-# ── OpenLibrary enrichment ───────────────────────────────────────────────────
-async def fetch_openlibrary(title: str, author: str) -> list[str]:
-    """Returns list of related book titles from OpenLibrary."""
+# ── Google Books enrichment ──────────────────────────────────────────────────
+# Google categories → INPX genre tokens (best-effort mapping)
+GBOOKS_GENRE_MAP = {
+    "fiction / classics":       ["prose_classic", "prose_rus_classic"],
+    "fiction / literary":       ["prose_classic", "prose_contemporary"],
+    "fiction / science fiction": ["sf", "sf_social", "sf_space"],
+    "fiction / fantasy":        ["sf_fantasy", "fantasy"],
+    "fiction / mystery":        ["detective", "thriller"],
+    "fiction / thrillers":      ["thriller", "detective"],
+    "fiction / horror":         ["horror", "thriller"],
+    "fiction / historical":     ["prose_history", "historical"],
+    "fiction / romance":        ["love_contemporary", "love_history"],
+    "fiction / adventure":      ["adventure", "prose_military"],
+    "fiction":                  ["prose_contemporary"],
+    "juvenile fiction":         ["child_prose", "child_sf"],
+    "biography & autobiography": ["biography"],
+    "history":                  ["history_russia", "sci_history"],
+    "psychology":               ["sci_psychology", "self_help"],
+    "philosophy":               ["sci_philosophy"],
+    "science":                  ["sci_popular", "sci_phys"],
+    "social science":           ["sci_social_studies", "prose_contemporary"],
+    "russian fiction":          ["prose_contemporary", "prose_classic"],
+}
+
+def map_google_categories(categories: list[str]) -> list[str]:
+    """Map Google Books categories to INPX genre codes."""
+    genres = []
+    for cat in categories:
+        key = cat.lower()
+        # exact match
+        if key in GBOOKS_GENRE_MAP:
+            genres.extend(GBOOKS_GENRE_MAP[key])
+            continue
+        # prefix match (e.g. "Fiction / Classics" → try "fiction / classics")
+        for pattern, mapped in GBOOKS_GENRE_MAP.items():
+            if key.startswith(pattern) or pattern.startswith(key.split("/")[0].strip()):
+                genres.extend(mapped)
+                break
+    return list(dict.fromkeys(genres))  # deduplicate, preserve order
+
+async def fetch_google_books(title: str, author: str) -> dict | None:
+    """Fetch book metadata from Google Books API. Returns cover, description, categories."""
+    if not GOOGLE_BOOKS_KEY:
+        return None
     try:
-        q = f"{title} {author}".strip()
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        parts = [p.strip() for p in author.split(",") if p.strip()]
+        author_last = parts[0] if parts else author
+
+        async with httpx.AsyncClient(timeout=8.0) as client:
             r = await client.get(
-                "https://openlibrary.org/search.json",
-                params={"q": q, "limit": 1, "fields": "key,subject"}
+                "https://www.googleapis.com/books/v1/volumes",
+                params={"q": f"{title} {author_last}", "maxResults": 5, "key": GOOGLE_BOOKS_KEY},
             )
             data = r.json()
-            docs = data.get("docs", [])
-            if not docs:
-                return []
-            subjects = docs[0].get("subject", [])[:10]
-            return subjects
+
+        items = data.get("items", [])
+        if not items:
+            return None
+
+        # Prefer item where author_last appears in volumeInfo authors
+        best = None
+        for item in items:
+            vi = item["volumeInfo"]
+            if author_last.lower() in " ".join(vi.get("authors", [])).lower():
+                best = vi
+                break
+        if best is None:
+            best = items[0]["volumeInfo"]
+
+        # Cover: prefer higher-res, upgrade to https
+        img = best.get("imageLinks", {})
+        cover_url = img.get("thumbnail") or img.get("smallThumbnail") or ""
+        cover_url = cover_url.replace("http://", "https://")
+
+        return {
+            "categories": best.get("categories", []),
+            "description": best.get("description", ""),
+            "cover_url": cover_url,
+        }
     except Exception:
-        return []
+        return None
+
+async def _enrich_google_books(book_id: str, title: str, author: str):
+    """Fire-and-forget: fetch Google Books data, save cover/description, find related books."""
+    try:
+        meta = await fetch_google_books(title, author)
+        if not meta:
+            return
+
+        def _save():
+            now = datetime.utcnow().isoformat()
+            with lconn() as lc:
+                # Always save cover + description regardless of categories
+                lc.execute(
+                    "INSERT OR REPLACE INTO google_meta(book_id,cover_url,description,categories,fetched_at) VALUES(?,?,?,?,?)",
+                    (book_id, meta.get("cover_url",""), meta.get("description",""),
+                     ",".join(meta.get("categories",[])), now)
+                )
+                lc.commit()
+
+            # Build genre-based relations if categories found
+            mapped = map_google_categories(meta.get("categories", []))
+            if not mapped:
+                return
+            rows = []
+            with bconn() as bc:
+                for genre in mapped[:3]:
+                    peers = bc.execute(
+                        "SELECT id FROM books WHERE genre=? AND id!=? ORDER BY RANDOM() LIMIT 10",
+                        (genre, book_id)
+                    ).fetchall()
+                    for p in peers:
+                        rows.append((book_id, p["id"], "google_books", 1.2, now))
+            if rows:
+                with lconn() as lc:
+                    lc.executemany(
+                        "INSERT OR REPLACE INTO relations(book_id,related_id,type,weight,fetched_at) VALUES(?,?,?,?,?)",
+                        rows
+                    )
+                    lc.commit()
+
+        await in_thread(_save)
+    except Exception as e:
+        print(f"[google_books] {book_id}: {e}", flush=True)
+
 
 async def build_relations(book_id: str):
     """Build and cache all relation types for a book. Awaitable — runs DB in thread pool."""
@@ -120,31 +228,7 @@ async def build_relations(book_id: str):
             lc.close()
 
     book = await in_thread(_build)
-    if book:
-        # OpenLibrary — fire-and-forget, truly background
-        asyncio.create_task(_enrich_openlibrary(book_id, book["title"], book["author"]))
 
-async def _enrich_openlibrary(book_id: str, title: str, author: str):
-    subjects = await fetch_openlibrary(title, author)
-    if not subjects:
-        return
-    # Find books in our DB matching those subjects as genres/titles
-    with bconn() as bc, lconn() as lc:
-        now = datetime.utcnow().isoformat()
-        rows = []
-        for subj in subjects[:5]:
-            peers = bc.execute(
-                "SELECT id FROM books WHERE title LIKE ? AND id!=? LIMIT 3",
-                (f"%{subj[:20]}%", book_id)
-            ).fetchall()
-            for p in peers:
-                rows.append((book_id, p["id"], "openlibrary", 1.5, now))
-        if rows:
-            lc.executemany(
-                "INSERT OR REPLACE INTO relations(book_id,related_id,type,weight,fetched_at) VALUES(?,?,?,?,?)",
-                rows
-            )
-            lc.commit()
 
 def needs_refresh(book_id: str) -> bool:
     with lconn() as lc:
@@ -156,6 +240,15 @@ def needs_refresh(book_id: str) -> bool:
             return True
         oldest = datetime.fromisoformat(row["oldest"])
         return datetime.utcnow() - oldest > timedelta(days=CACHE_DAYS)
+
+def needs_google_enrichment(book_id: str) -> bool:
+    """True if book has no google_books relations yet."""
+    with lconn() as lc:
+        row = lc.execute(
+            "SELECT COUNT(*) as n FROM relations WHERE book_id=? AND type='google_books'",
+            (book_id,)
+        ).fetchone()
+        return row["n"] == 0
 
 # ── App ──────────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -230,20 +323,91 @@ def search(
         "books": books,
     }
 
+# ── Genre groups ─────────────────────────────────────────────────────────────
+GENRE_GROUPS = {
+    "Фантастика и фэнтези": ["sf", "sf_social", "sf_space", "sf_history", "sf_action",
+        "sf_fantasy", "sf_heroic", "sf_detective", "sf_horror", "sf_humor", "sf_epic",
+        "sf_cyberpunk", "sf_postapocalyptic", "sf_litrpg", "fantasy", "fantasy_alt_hist",
+        "sf_stimpank", "sf_mystic", "sf_technofantasy", "sf_irony"],
+    "Детективы и триллеры": ["detective", "thriller", "detective_police", "detective_hard",
+        "detective_irony", "detective_maniac", "detective_classic", "detective_hist",
+        "detective_action", "detective_espionage", "det_espionage", "det_action",
+        "det_classic", "det_irony", "det_history", "det_hard", "det_police", "det_crime",
+        "det_mental", "det_political", "thriller", "horror"],
+    "Проза": ["prose_contemporary", "prose_classic", "prose_rus_classic", "prose_counter",
+        "prose_history", "prose_military", "prose_su_classics", "prose_magic",
+        "prose_poem", "prose_abs", "antique_russian", "antique_east"],
+    "Любовные романы": ["love_contemporary", "love_history", "love_short", "love_erotica",
+        "love_sf", "love_det", "love_hard"],
+    "Приключения": ["adventure", "adventure_western", "adventure_history", "adventure_marine",
+        "adventure_geo", "adventure_animal", "adventure_modern"],
+    "Для детей": ["child_prose", "child_sf", "child_det", "child_tale", "child_education",
+        "child_adv", "child_humor", "child_classical", "children", "fairy_tales"],
+    "Юмор": ["humor", "humor_prose", "humor_verse", "humor_satire", "humor_anecdote"],
+    "Наука и образование": ["sci_popular", "sci_phys", "sci_math", "sci_chem", "sci_biology",
+        "sci_medicine", "sci_history", "sci_philosophy", "sci_psychology", "sci_social_studies",
+        "sci_linguistic", "sci_geo", "sci_tech", "sci_it", "sci_ecology", "sci_transport",
+        "sci_juris", "sci_economy", "sci_politics", "sci_culture", "sci_religion",
+        "sci_cosmos", "sci_state", "sci_pedagogy", "sci_veterinary"],
+    "История": ["history_russia", "sci_history", "antique", "antique_myths",
+        "antique_antic", "antique_oriental", "antique_european", "biography"],
+    "Психология и саморазвитие": ["self_help", "sci_psychology", "popular_business",
+        "org_behavior", "management", "marketing", "economics"],
+    "Техника и IT": ["sci_it", "comp_www", "comp_soft", "comp_hard", "comp_programming",
+        "comp_db", "comp_osnet", "comp_game", "sci_tech"],
+    "Поэзия": ["poetry", "antique_poetry", "lyrics"],
+    "Драматургия": ["dramaturgy", "antique_plays"],
+    "Религия и эзотерика": ["religion", "religion_budda", "religion_christianity",
+        "religion_islam", "religion_judaism", "religion_paganism", "religion_self",
+        "religion_esoterics", "religion_hinduism"],
+    "Спорт и здоровье": ["sport", "home", "health", "sci_medicine"],
+    "Эротика 18+": ["love_erotica", "sex_sf", "sex_story", "sex_humor", "adv_geo"],
+}
+
+# invert: genre_code → group_name
+GENRE_TO_GROUP = {}
+for grp, codes in GENRE_GROUPS.items():
+    for code in codes:
+        if code not in GENRE_TO_GROUP:
+            GENRE_TO_GROUP[code] = grp
+
 # ── Genres ───────────────────────────────────────────────────────────────────
 @app.get("/api/genres")
-def genres(adult: bool = False):
+def genres(adult: bool = False, grouped: bool = False):
     with bconn() as bc:
         rows = bc.execute(
             "SELECT genre, COUNT(*) as n FROM books GROUP BY genre ORDER BY n DESC"
         ).fetchall()
+
+    if grouped:
+        # Return groups with total counts
+        group_counts: dict[str, int] = {}
+        ungrouped = []
+        for r in rows:
+            is_adult = r["genre"] in ADULT_GENRES
+            if not adult and is_adult:
+                continue
+            if adult and not is_adult:
+                continue
+            grp = GENRE_TO_GROUP.get(r["genre"])
+            if grp:
+                group_counts[grp] = group_counts.get(grp, 0) + r["n"]
+            else:
+                ungrouped.append({"genre": r["genre"], "count": r["n"]})
+        result = [{"genre": k, "count": v, "is_group": True}
+                  for k, v in sorted(group_counts.items(), key=lambda x: -x[1])]
+        # Append ungrouped genres that have significant count
+        result += [g for g in ungrouped if g["count"] > 100]
+        return result
+
+    # Flat list (includes group field for frontend optgroup building)
     result = []
     for r in rows:
         is_adult = r["genre"] in ADULT_GENRES
         if adult and is_adult:
-            result.append({"genre": r["genre"], "count": r["n"]})
+            result.append({"genre": r["genre"], "count": r["n"], "group": GENRE_TO_GROUP.get(r["genre"])})
         elif not adult and not is_adult:
-            result.append({"genre": r["genre"], "count": r["n"]})
+            result.append({"genre": r["genre"], "count": r["n"], "group": GENRE_TO_GROUP.get(r["genre"])})
     return result
 
 # ── Book detail ──────────────────────────────────────────────────────────────
@@ -258,10 +422,19 @@ async def book_detail(book_id: str):
     if needs_refresh(book_id):
         await build_relations(book_id)
 
-    # Get status
+    # Google Books enrichment — runs independently, fire-and-forget
+    if needs_google_enrichment(book_id):
+        asyncio.create_task(_enrich_google_books(book_id, dict(book)["title"], dict(book)["author"]))
+
+    # Get status + google meta
     with lconn() as lc:
         status_row = lc.execute(
             "SELECT status, rating, notes, date_updated FROM read_log WHERE book_id=?",
+            (book_id,)
+        ).fetchone()
+
+        gmeta_row = lc.execute(
+            "SELECT cover_url, description, categories FROM google_meta WHERE book_id=?",
             (book_id,)
         ).fetchone()
 
@@ -289,6 +462,10 @@ async def book_detail(book_id: str):
     result = book_to_dict(book)
     result["status"] = dict(status_row) if status_row else None
     result["related"] = related
+    if gmeta_row:
+        result["cover_url"] = gmeta_row["cover_url"] or ""
+        result["description"] = gmeta_row["description"] or ""
+        result["google_categories"] = gmeta_row["categories"] or ""
     return result
 
 # ── Status update ─────────────────────────────────────────────────────────────

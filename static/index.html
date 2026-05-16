@@ -31,9 +31,12 @@
       <input v-model="searchQ" @input="debouncedSearch" placeholder="Название или автор..."
         class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
       <select v-model="searchGenre" @change="doSearch(0)"
-        class="border rounded-lg px-2 py-2 text-sm max-w-[140px]">
+        class="border rounded-lg px-2 py-2 text-sm max-w-[160px]">
         <option value="">Все жанры</option>
-        <option v-for="g in genres" :key="g.genre" :value="g.genre">{{ fmtGenre(g.genre) }} ({{ g.count }})</option>
+        <optgroup v-for="g in genreGroups" :key="g.genre" :label="g.genre + ' (' + g.count + ')'">
+          <option v-for="sub in g.children || []" :key="sub.genre" :value="sub.genre">{{ fmtGenre(sub.genre) }} ({{ sub.count }})</option>
+        </optgroup>
+        <option v-for="g in genreFlat" :key="g.genre" :value="g.genre">{{ fmtGenre(g.genre) }} ({{ g.count }})</option>
       </select>
     </div>
 
@@ -71,18 +74,27 @@
     </div>
   </div>
 
-  <!-- BOOK DETAIL (modal-like page) -->
-  <div v-if="page==='book' && currentBook" class="max-w-2xl mx-auto p-4">
+  <!-- BOOK DETAIL (modal-like page) -->\n  <div v-if="page==='book' && currentBook" class="max-w-2xl mx-auto p-4">
     <button @click="goBack()" class="text-blue-500 text-sm mb-4 flex items-center gap-1">← Назад</button>
 
     <div class="bg-white rounded-lg border p-4 mb-4">
-      <h1 class="font-bold text-lg leading-tight mb-1">{{ currentBook.title }}</h1>
-      <div class="text-gray-600 text-sm mb-1">{{ currentBook.author_display }}</div>
-      <div class="flex flex-wrap gap-1 mb-3">
-        <span class="text-xs bg-gray-100 rounded px-2 py-0.5">{{ fmtGenre(currentBook.genre) }}</span>
-        <span v-if="currentBook.series" class="text-xs bg-blue-50 text-blue-600 rounded px-2 py-0.5">{{ currentBook.series }}</span>
-        <span class="text-xs text-gray-400">{{ currentBook.lang }} · {{ currentBook.date?.slice(0,4) }}</span>
+      <!-- Cover + meta side by side -->
+      <div class="flex gap-4 mb-3">
+        <img v-if="currentBook.cover_url" :src="currentBook.cover_url"
+          class="w-20 h-28 object-cover rounded shadow-sm shrink-0" alt="обложка">
+        <div class="flex-1 min-w-0">
+          <h1 class="font-bold text-lg leading-tight mb-1">{{ currentBook.title }}</h1>
+          <div class="text-gray-600 text-sm mb-1">{{ currentBook.author_display }}</div>
+          <div class="flex flex-wrap gap-1">
+            <span class="text-xs bg-gray-100 rounded px-2 py-0.5">{{ fmtGenre(currentBook.genre) }}</span>
+            <span v-if="currentBook.series" class="text-xs bg-blue-50 text-blue-600 rounded px-2 py-0.5">{{ currentBook.series }}</span>
+            <span class="text-xs text-gray-400">{{ currentBook.lang }} · {{ currentBook.date?.slice(0,4) }}</span>
+          </div>
+        </div>
       </div>
+
+      <!-- Description -->
+      <p v-if="currentBook.description" class="text-sm text-gray-600 mb-3 leading-relaxed line-clamp-4">{{ currentBook.description }}</p>
 
       <!-- Status buttons -->
       <div class="flex gap-2 flex-wrap mb-3">
@@ -185,6 +197,8 @@ createApp({
     const searchLimit = 40
     const isAdult = computed(() => page.value === 'adult')
     const genres = ref([])
+    const genreGroups = ref([])   // grouped genres for <optgroup>
+    const genreFlat = ref([])     // ungrouped remainder
 
     // Book
     const currentBook = ref(null)
@@ -228,8 +242,22 @@ createApp({
     }
 
     async function loadGenres() {
-      const r = await fetch('/api/genres?adult=' + isAdult.value)
-      genres.value = await r.json()
+      const flat = await fetch('/api/genres?adult=' + isAdult.value).then(r => r.json())
+      genres.value = flat
+      // Build optgroup map: groupName → [genres]
+      const map = {}
+      const ungrouped = []
+      flat.forEach(g => {
+        if (g.group) {
+          if (!map[g.group]) map[g.group] = { genre: g.group, count: 0, children: [] }
+          map[g.group].children.push(g)
+          map[g.group].count += g.count
+        } else {
+          ungrouped.push(g)
+        }
+      })
+      genreGroups.value = Object.values(map).sort((a,b) => b.count - a.count)
+      genreFlat.value = ungrouped
     }
 
 
@@ -316,12 +344,12 @@ createApp({
       return { read: 'bg-green-500 text-white', reading: 'bg-orange-400 text-white', want: 'bg-blue-500 text-white' }[s] || 'bg-gray-200'
     }
     function relTypeLabel(t) {
-      return { same_author: 'Тот же автор', same_series: 'Та же серия', same_genre: 'Похожий жанр', openlibrary: 'Часто читают вместе' }[t] || t
+      return { same_author: 'Тот же автор', same_series: 'Та же серия', same_genre: 'Похожий жанр', google_books: 'Также читают' }[t] || t
     }
 
     const groupedRelated = computed(() => {
       if (!currentBook.value?.related) return []
-      const order = ['same_series', 'same_author', 'openlibrary', 'same_genre']
+      const order = ['same_series', 'same_author', 'google_books', 'same_genre']
       const groups = {}
       currentBook.value.related.forEach(b => {
         if (!groups[b.relation_type]) groups[b.relation_type] = []
@@ -407,7 +435,7 @@ createApp({
     return {
       page, prevPage, loading,
       searchQ, searchGenre, searchResults, searchTotal, searchPage, searchLimit,
-      genres, currentBook, myBooks, myFilter, statusMap, graphEmpty,
+      genres, genreGroups, genreFlat, currentBook, myBooks, myFilter, statusMap, graphEmpty,
       debouncedSearch, doSearch, openBook, navigate, goBack, setStatus, loadMy,
       fmtGenre, statusLabel, statusBadgeClass, statusBtnActive, relTypeLabel,
       groupedRelated,
