@@ -341,40 +341,53 @@ GENRE_GROUPS = {
     "Фантастика и фэнтези": ["sf", "sf_social", "sf_space", "sf_history", "sf_action",
         "sf_fantasy", "sf_heroic", "sf_detective", "sf_horror", "sf_humor", "sf_epic",
         "sf_cyberpunk", "sf_postapocalyptic", "sf_litrpg", "fantasy", "fantasy_alt_hist",
-        "sf_stimpank", "sf_mystic", "sf_technofantasy", "sf_irony"],
+        "sf_stimpank", "sf_mystic", "sf_technofantasy", "sf_irony", "sf_etc",
+        "sf_fantasy_city", "popadancy", "boyar_anime", "network_literature"],
     "Детективы и триллеры": ["detective", "thriller", "detective_police", "detective_hard",
         "detective_irony", "detective_maniac", "detective_classic", "detective_hist",
         "detective_action", "detective_espionage", "det_espionage", "det_action",
         "det_classic", "det_irony", "det_history", "det_hard", "det_police", "det_crime",
-        "det_mental", "det_political", "thriller", "horror"],
+        "det_mental", "det_political", "horror", "love_detective", "det_lady",
+        "det_artifact"],
     "Проза": ["prose_contemporary", "prose_classic", "prose_rus_classic", "prose_counter",
         "prose_history", "prose_military", "prose_su_classics", "prose_magic",
-        "prose_poem", "prose_abs", "antique_russian", "antique_east"],
+        "prose_poem", "prose_abs", "antique_russian", "antique_east", "prose", "story",
+        "fanfiction", "literature_20"],
     "Любовные романы": ["love_contemporary", "love_history", "love_short", "love_erotica",
-        "love_sf", "love_det", "love_hard"],
+        "love_sf", "love_det", "love_hard", "love"],
     "Приключения": ["adventure", "adventure_western", "adventure_history", "adventure_marine",
-        "adventure_geo", "adventure_animal", "adventure_modern"],
+        "adventure_geo", "adventure_animal", "adventure_modern",
+        "adv_history", "adv_animal", "adv_indian", "adv_maritime", "adv_geo",
+        "adv_western", "adv_modern", "adv_extreme"],
     "Для детей": ["child_prose", "child_sf", "child_det", "child_tale", "child_education",
-        "child_adv", "child_humor", "child_classical", "children", "fairy_tales"],
+        "child_adv", "child_humor", "child_classical", "children", "fairy_tales",
+        "child_tale_russian_writers", "child_tale_foreign_writers",
+        "child_det_children_detectives", "foreign_children", "child_verse",
+        "folk_tale", "child_adv_animal", "child_sf_horror", "child_prose_history"],
     "Юмор": ["humor", "humor_prose", "humor_verse", "humor_satire", "humor_anecdote"],
+    "Биографии и публицистика": ["nonf_biography", "nonf_publicism", "nonf_criticism",
+        "biography", "nonfiction", "sci_culture"],
     "Наука и образование": ["sci_popular", "sci_phys", "sci_math", "sci_chem", "sci_biology",
         "sci_medicine", "sci_history", "sci_philosophy", "sci_psychology", "sci_social_studies",
         "sci_linguistic", "sci_geo", "sci_tech", "sci_it", "sci_ecology", "sci_transport",
-        "sci_juris", "sci_economy", "sci_politics", "sci_culture", "sci_religion",
-        "sci_cosmos", "sci_state", "sci_pedagogy", "sci_veterinary"],
-    "История": ["history_russia", "sci_history", "antique", "antique_myths",
-        "antique_antic", "antique_oriental", "antique_european", "biography"],
-    "Психология и саморазвитие": ["self_help", "sci_psychology", "popular_business",
+        "sci_juris", "sci_economy", "sci_politics", "sci_religion",
+        "sci_cosmos", "sci_state", "sci_pedagogy", "sci_veterinary",
+        "science", "sci_philology", "sci_theories", "sci_medicine_alternative"],
+    "История": ["history_russia", "antique", "antique_myths",
+        "antique_antic", "antique_oriental", "antique_european", "antique_ant"],
+    "Психология и саморазвитие": ["self_help", "popular_business",
         "org_behavior", "management", "marketing", "economics"],
-    "Техника и IT": ["sci_it", "comp_www", "comp_soft", "comp_hard", "comp_programming",
-        "comp_db", "comp_osnet", "comp_game", "sci_tech"],
+    "Техника и IT": ["comp_www", "comp_soft", "comp_hard", "comp_programming",
+        "comp_db", "comp_osnet", "comp_game", "computers"],
     "Поэзия": ["poetry", "antique_poetry", "lyrics"],
     "Драматургия": ["dramaturgy", "antique_plays"],
     "Религия и эзотерика": ["religion", "religion_budda", "religion_christianity",
         "religion_islam", "religion_judaism", "religion_paganism", "religion_self",
         "religion_esoterics", "religion_hinduism"],
-    "Спорт и здоровье": ["sport", "home", "health", "sci_medicine"],
-    "Эротика 18+": ["love_erotica", "sex_sf", "sex_story", "sex_humor", "adv_geo"],
+    "Дом и быт": ["home_health", "home_cooking", "home_sport", "home_crafts",
+        "home_pets", "home_sex", "sport", "health", "home_garden", "home"],
+    "Справочники": ["ref_encyc", "ref_dict", "ref_guide", "ref_almanac", "ref_ref",
+        "economics_ref", "banking"],
 }
 
 # invert: genre_code → group_name
@@ -383,6 +396,15 @@ for grp, codes in GENRE_GROUPS.items():
     for code in codes:
         if code not in GENRE_TO_GROUP:
             GENRE_TO_GROUP[code] = grp
+
+def genre_to_group(genre_code: str) -> str | None:
+    """Handle compound genre codes like 'love_sf:network_literature:popadancy'.
+    Split on ':', return the group of the first component that matches."""
+    for part in genre_code.split(":"):
+        grp = GENRE_TO_GROUP.get(part)
+        if grp:
+            return grp
+    return None
 
 # ── Genres ───────────────────────────────────────────────────────────────────
 @app.get("/api/genres")
@@ -402,7 +424,7 @@ def genres(adult: bool = False, grouped: bool = False):
                 continue
             if adult and not is_adult:
                 continue
-            grp = GENRE_TO_GROUP.get(r["genre"])
+            grp = genre_to_group(r["genre"])
             if grp:
                 group_counts[grp] = group_counts.get(grp, 0) + r["n"]
             else:
@@ -418,9 +440,9 @@ def genres(adult: bool = False, grouped: bool = False):
     for r in rows:
         is_adult = r["genre"] in ADULT_GENRES
         if adult and is_adult:
-            result.append({"genre": r["genre"], "count": r["n"], "group": GENRE_TO_GROUP.get(r["genre"])})
+            result.append({"genre": r["genre"], "count": r["n"], "group": genre_to_group(r["genre"])})
         elif not adult and not is_adult:
-            result.append({"genre": r["genre"], "count": r["n"], "group": GENRE_TO_GROUP.get(r["genre"])})
+            result.append({"genre": r["genre"], "count": r["n"], "group": genre_to_group(r["genre"])})
     return result
 
 # ── Book detail ──────────────────────────────────────────────────────────────
