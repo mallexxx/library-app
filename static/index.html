@@ -73,7 +73,7 @@
 
   <!-- BOOK DETAIL (modal-like page) -->
   <div v-if="page==='book' && currentBook" class="max-w-2xl mx-auto p-4">
-    <button @click="history.back()" class="text-blue-500 text-sm mb-4 flex items-center gap-1">← Назад</button>
+    <button @click="goBack()" class="text-blue-500 text-sm mb-4 flex items-center gap-1">← Назад</button>
 
     <div class="bg-white rounded-lg border p-4 mb-4">
       <h1 class="font-bold text-lg leading-tight mb-1">{{ currentBook.title }}</h1>
@@ -232,21 +232,7 @@ createApp({
       genres.value = await r.json()
     }
 
-    async function openBook(id) {
-      prevPage.value = page.value
-      page.value = 'book'
-      currentBook.value = null
-      history.pushState({ page: 'book', bookId: id, prevPage: prevPage.value }, '')
-      const r = await fetch('/api/book/' + id)
-      currentBook.value = await r.json()
-      // Update status cache for related too
-      if (currentBook.value.status?.status) {
-        statusMap.value[id] = currentBook.value.status.status
-      }
-      currentBook.value.related?.forEach(b => {
-        if (statusMap.value[b.id]) b._status = statusMap.value[b.id]
-      })
-    }
+
 
     async function setStatus(status) {
       if (!currentBook.value) return
@@ -345,10 +331,28 @@ createApp({
     })
 
     // ── Navigation ──────────────────────────────────────────────────────────
+    // Hash-based routing: #/book/123, #/my, #/graph, #/adult, #/ (home)
+    function pageUrl(toPage, bookId) {
+      if (toPage === 'book' && bookId) return '#/book/' + bookId
+      if (toPage === 'my') return '#/my'
+      if (toPage === 'graph') return '#/graph'
+      if (toPage === 'adult') return '#/adult'
+      return '#/'
+    }
+
+    function parseHash() {
+      const hash = location.hash.replace(/^#/, '') || '/'
+      if (hash.startsWith('/book/')) return { page: 'book', bookId: parseInt(hash.slice(6)) }
+      if (hash === '/my') return { page: 'my', bookId: null }
+      if (hash === '/graph') return { page: 'graph', bookId: null }
+      if (hash === '/adult') return { page: 'adult', bookId: null }
+      return { page: 'home', bookId: null }
+    }
+
     // Single source of truth: navigate(page, bookId?) handles history + data loading
     async function navigate(toPage, bookId = null, pushHistory = true) {
       if (pushHistory) {
-        history.pushState({ page: toPage, bookId }, '')
+        location.hash = pageUrl(toPage, bookId).slice(1) // strip leading #
       }
 
       if (toPage === 'book' && bookId) {
@@ -356,9 +360,6 @@ createApp({
         currentBook.value = null
         const r = await fetch('/api/book/' + bookId)
         currentBook.value = await r.json()
-        if (currentBook.value.status?.status) {
-          statusMap.value[bookId] = currentBook.value.status.status
-        }
         if (currentBook.value.status) {
           statusMap.value[bookId] = currentBook.value.status.status || currentBook.value.status
         }
@@ -378,25 +379,36 @@ createApp({
       return navigate('book', id)
     }
 
-    watch(page, () => {}) // keep reactivity, navigation handled by navigate()
+    function goBack() {
+      history.back()
+    }
 
     onMounted(() => {
-      // Stamp initial history entry so back works from first page
-      history.replaceState({ page: 'home', bookId: null }, '')
-      loadGenres()
-      doSearch(0)
+      // Set initial hash if missing
+      if (!location.hash || location.hash === '#') location.replace('#/')
 
-      window.addEventListener('popstate', (e) => {
-        const state = e.state || { page: 'home', bookId: null }
-        navigate(state.page, state.bookId, false) // false = don't push again
+      // Handle browser back/forward via hashchange
+      window.addEventListener('hashchange', () => {
+        const { page: p, bookId } = parseHash()
+        navigate(p, bookId, false) // false = don't push, already changed
       })
+
+      // Load initial state from hash
+      const { page: initPage, bookId: initBook } = parseHash()
+      if (initPage === 'book' && initBook) {
+        navigate(initPage, initBook, false)
+      } else {
+        loadGenres()
+        doSearch(0)
+        if (initPage !== 'home') navigate(initPage, null, false)
+      }
     })
 
     return {
       page, prevPage, loading,
       searchQ, searchGenre, searchResults, searchTotal, searchPage, searchLimit,
       genres, currentBook, myBooks, myFilter, statusMap, graphEmpty,
-      debouncedSearch, doSearch, openBook, navigate, setStatus, loadMy,
+      debouncedSearch, doSearch, openBook, navigate, goBack, setStatus, loadMy,
       fmtGenre, statusLabel, statusBadgeClass, statusBtnActive, relTypeLabel,
       groupedRelated,
     }

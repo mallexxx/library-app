@@ -10,6 +10,7 @@ services:
       - /mnt/RED_2TB/storage/Downloads/fb2.Flibusta.Net:/library:ro
       - /mnt/RED_2TB/storage/books:/books:ro
       - /mnt/RED_2TB/docker/library/data:/data:rw
+      - /mnt/RED_2TB/docker/library/static:/app/static:ro
     networks:
       - caddy_default
 
